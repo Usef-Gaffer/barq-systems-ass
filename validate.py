@@ -7,7 +7,8 @@ import time
 import urllib.request
 import urllib.error
 
-BASE_URL = "http://localhost:8080"
+import os
+BASE_URL = f"http://localhost:{os.getenv('PUBLIC_PORT', '8090')}"
 TIMEOUT = 3
 RETRIES = 10
 RETRY_DELAY = 2

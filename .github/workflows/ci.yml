@@ -32,13 +32,17 @@ jobs:
       - name: Build images
         run: docker compose build
 
+      - name: Configure public port
+        run: cp .env.example .env
+
       - name: Start environment
         run: docker compose up -d
 
       - name: Wait for readiness (bounded)
         run: |
+          PORT=$(grep -oP '(?<=PUBLIC_PORT=)\d+' .env.example)
           for i in $(seq 1 30); do
-            if curl -sf http://localhost:8080/ready > /dev/null; then
+            if curl -sf "http://localhost:${PORT}/ready" > /dev/null; then
               echo "Ready after $i attempt(s)"
               exit 0
             fi
@@ -49,6 +53,8 @@ jobs:
           exit 1
 
       - name: Run validation
+        env:
+          PUBLIC_PORT: 8090
         run: python3 validate.py
 
       - name: Dump logs on failure

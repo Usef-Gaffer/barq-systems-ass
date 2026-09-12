@@ -8,11 +8,16 @@ instances, backed by PostgreSQL and Redis.
 
 > **Note on documentation timing:** this README, along with `decisions.md`,
 > `troubleshooting.md`, `security_review.md` and `log_analysis.md`, was
-> completed after the two-instance setup was working and verified, and is
-> updated once more after the live video changes (third instance, port 8090)
-> to keep it accurate. Documentation-only commits after the technical work
-> reflect that timing, not late discovery of issues — see `AI_USAGE.md` and
-> the evidence index for exact commit references.
+> completed after the two-instance setup was working and verified, then
+> updated once more (this revision) after the live video session in which
+> `video_challenge.sh` was diagnosed/fixed, the public port was changed to
+> 8090, and the third instance (`app-03`) was added. Documentation-only
+> commits after the technical work reflect that timing, not late discovery
+> of issues — see `AI_USAGE.md` and `docs/EVIDENCE_INDEX.md` for exact
+> commit references.
+>
+> **Final state (matches the video and this README):** `nginx`, `app-01`,
+> `app-02`, `app-03`, `postgres`, `redis` — public port **8090**.
 
 ## What was fixed
 
@@ -51,31 +56,40 @@ docker compose up -d --build
 docker compose ps
 ```
 
-All five containers (`nginx`, `app-01`, `app-02`, `postgres`, `redis`)
-should report `Up` / `(healthy)`. `nginx` has no healthcheck defined but
-depends on both app services having started.
+All six containers (`nginx`, `app-01`, `app-02`, `app-03`, `postgres`,
+`redis`) should report `Up` / `(healthy)`. `nginx` has its own healthcheck
+(a plain `wget` against `/`) in addition to depending on the app services
+having started.
 
 ## Test the endpoints (through NGINX only)
 
 ```bash
-curl -s http://localhost:8080/            | python3 -m json.tool
-curl -s http://localhost:8080/health      | python3 -m json.tool
-curl -s http://localhost:8080/ready       | python3 -m json.tool
-curl -s http://localhost:8080/records     | python3 -m json.tool
-curl -s -X POST http://localhost:8080/records \
+curl -s http://localhost:8090/            | python3 -m json.tool
+curl -s http://localhost:8090/health      | python3 -m json.tool
+curl -s http://localhost:8090/ready       | python3 -m json.tool
+curl -s http://localhost:8090/records     | python3 -m json.tool
+curl -s -X POST http://localhost:8090/records \
      -H "Content-Type: application/json" -d '{"title":"example"}' | python3 -m json.tool
-curl -s http://localhost:8080/counter     | python3 -m json.tool
+curl -s http://localhost:8090/counter     | python3 -m json.tool
 
-# Prove both backends serve traffic through NGINX:
-for i in $(seq 1 10); do
-  curl -s http://localhost:8080/instance | python3 -c "import sys,json; print(json.load(sys.stdin)['instance_id'])"
-done
+# Prove all three backends serve traffic through NGINX:
+for i in $(seq 1 15); do
+  curl -s http://localhost:8090/instance | python3 -c "import sys,json; print(json.load(sys.stdin)['instance_id'])"
+done | sort | uniq -c
 ```
 
 ## Validate the environment
 
 ```bash
 python3 validate.py
+```
+
+`validate.py` reads the target port from the `PUBLIC_PORT` environment
+variable (defaults to `8090`, matching `.env.example`); set it explicitly
+if you have overridden the port:
+
+```bash
+PUBLIC_PORT=8090 python3 validate.py
 ```
 
 Runs bounded checks (public access, `/health`, `/ready`, `/records`,
@@ -106,10 +120,10 @@ To prove persistence end-to-end (as done during development, see
 `troubleshooting.md`):
 
 ```bash
-curl -s -X POST http://localhost:8080/records -H "Content-Type: application/json" \
+curl -s -X POST http://localhost:8090/records -H "Content-Type: application/json" \
      -d '{"title":"persistence-check"}'
-docker compose up -d --force-recreate app-01 app-02 postgres
-curl -s http://localhost:8080/records | python3 -m json.tool   # record still present
+docker compose up -d --force-recreate app-01 app-02 app-03 postgres
+curl -s http://localhost:8090/records | python3 -m json.tool   # record still present
 ```
 
 ## Cleanup
@@ -132,6 +146,9 @@ client -> localhost:8090 -> nginx (frontend network only)
                                     -> postgres:5432 (backend network, internal)
                                     -> redis:6379    (backend network, internal)
 ```
+
+This is the final, live-verified state: three app instances behind NGINX,
+public access on port 8090.
 
 Only NGINX is published on the host. NGINX cannot reach PostgreSQL/Redis
 directly (verified: DNS resolution for `postgres` fails from inside the

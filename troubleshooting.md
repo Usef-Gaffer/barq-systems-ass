@@ -230,3 +230,105 @@ during the work, not a reconstructed narrative.
 - Related commit: included in `feat: implement validate.py with bounded
   checks` (fixed before the first commit of this file).
 - Remaining uncertainty: none.
+
+---
+
+## Entry 9 — `video_challenge.sh` preflight failure: nginx never "healthy" (live, recorded)
+
+- Symptom: First-ever run of `./video_challenge.sh` (during the recorded
+  session, on the two-instance/port-8080 configuration) immediately failed
+  with `Challenge stopped: Repair the environment first: every service must
+  be healthy and unpaused`, even though `docker compose ps` showed every
+  service `Up`.
+- Hypothesis: the script's preflight (`scripts/video_challenge.py`)
+  requires every one of the five services to report Docker health status
+  `healthy` via `docker inspect`, but `nginx` had never been given a
+  `healthcheck:` in `docker-compose.yml` (only the app services inherited
+  one via the `x-app` anchor) — so `docker inspect` reports no `Health`
+  field for nginx at all, which the script's check
+  (`state.get("Health", {}).get("Status") != "healthy"`) treats as not
+  healthy.
+- Command or test: `docker compose ps` (showed nginx `Up` with no
+  `(healthy)` suffix, unlike every other service).
+- Actual output: confirmed nginx was the only service without a health
+  status.
+- Failed attempt and what changed your thinking: none — the missing
+  healthcheck was visible directly in the `ps` output on the first check.
+- Root cause: `docker-compose.yml`'s `nginx` service had no `healthcheck:`
+  block.
+- Fix: added a `healthcheck` to the `nginx` service (`wget` against `/`,
+  matching the interval/timeout/retries style already used elsewhere).
+- Retest evidence: after rebuilding, `docker compose ps` showed nginx as
+  `(healthy)`; `./video_challenge.sh` then ran past preflight and applied a
+  fault, printing `Challenge applied.` and a receipt ID.
+- Related commit: `feat: change public port to 8090 and add third app
+  instance` (bundled with the port/instance-count changes made in the same
+  live session).
+- Remaining uncertainty: none.
+
+---
+
+## Entry 10 — `video_challenge.sh` fault diagnosis and live repair (recorded)
+
+- Symptom: after the challenge applied successfully, `/counter` returned
+  `{"error": "redis_unavailable", ...}` and `/ready` reported
+  `{"dependencies": {"postgres": "ready", "redis": "unavailable"}, "status":
+  "not_ready"}`, while `/` and `/records` continued to work normally.
+- Hypothesis: the script injects one of three possible faults at random
+  (disconnect app-02 from frontend, disconnect redis from backend, or pause
+  app-01); a redis-specific, postgres-unaffected failure pattern points at
+  the redis-network-disconnect variant specifically.
+- Command or test: `docker network inspect barq-assessment_backend`.
+- Actual output: the `backend` network's container list included `postgres`,
+  `app-01`, and `app-02`, but **not `redis`** — confirming redis had been
+  disconnected from the network the app instances use to reach it.
+- Failed attempt and what changed your thinking: none — the network
+  inspection immediately confirmed the hypothesis on the first check.
+- Root cause: `scripts/video_challenge.py` executed
+  `docker network disconnect <backend-network-id> <redis-container-id>`.
+- Fix: `docker network connect barq-assessment_backend redis` — a targeted
+  repair addressing exactly the disconnected network, with **no**
+  `docker compose down` or other full-stack reset, per the task's
+  constraint.
+- Retest evidence: immediately after reconnecting, `/ready` returned
+  `{"dependencies": {"postgres": "ready", "redis": "ready"}, "status":
+  "ready"}`; `/counter` returned a valid incrementing count; a full
+  `validate.py` run passed all 8 checks.
+- Related commit: no code change was needed for this fix (a runtime Docker
+  command only); documented here and in the video itself.
+- Remaining uncertainty: none — this repair is specific to the
+  redis-disconnect variant of the fault; the other two possible variants
+  (app-02/frontend disconnect, app-01 pause) were not encountered in this
+  run and would require `docker network connect barq-assessment_frontend
+  app-02` or `docker unpause app-01` respectively.
+
+---
+
+## Entry 11 — CI failed after the port/instance changes (real GitHub Actions run)
+
+- Symptom: after pushing the commit that changed the default public port to
+  8090 (via `.env.example`) and updated `validate.py`'s default port to
+  match, the next GitHub Actions run failed with `<urlopen error [Errno 111]
+  Connection refused>` on every endpoint check.
+- Hypothesis: `docker-compose.yml`'s NGINX port mapping still falls back to
+  `${PUBLIC_PORT:-8080}` when no `.env` file is present, and the CI workflow
+  never created one — so in CI, NGINX was published on 8080 while
+  `validate.py` (now defaulting to 8090) was checking the wrong port.
+- Command or test: read `.github/workflows/ci.yml` directly; confirmed no
+  step copied `.env.example` to `.env`, and the "Wait for readiness" step
+  had `http://localhost:8080/ready` hardcoded.
+- Actual output: CI log showed the exact FAIL list matching a local repro of
+  the same mismatch (`PUBLIC_PORT` unset, `validate.py` defaulting to 8090).
+- Failed attempt and what changed your thinking: none — the workflow file
+  itself made the missing step obvious once read.
+- Root cause: the CI workflow and the application code were updated to two
+  different default ports in the same change, without updating CI's own
+  hardcoded assumptions.
+- Fix: added a `Configure public port` step (`cp .env.example .env`) before
+  starting the stack, changed the readiness-wait URL to read the port from
+  `.env.example` dynamically, and passed `PUBLIC_PORT=8090` explicitly to
+  the `validate.py` step.
+- Retest evidence: the next GitHub Actions run on this branch succeeded
+  (see `docs/EVIDENCE_INDEX.md` for the commit/run reference).
+- Related commit: `fix: align CI with new 8090 default port`.
+- Remaining uncertainty: none.
